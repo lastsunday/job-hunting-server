@@ -1,0 +1,138 @@
+name: Release
+
+permissions:
+  contents: write
+  packages: write
+  attestations: write
+  id-token: write
+
+on:
+  push:
+    tags:
+      - "*"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gen latest changelog
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          awk '/^##[^#]/{print NR}' CHANGELOG.md | head -n 2 | xargs | tr ' ' ',' | xargs -I {} sed -n {}p  CHANGELOG.md | sed '$d' > ${{ github.workspace }}-CHANGELOG.txt
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          body_path: ${{ github.workspace }}-CHANGELOG.txt
+          
+  upload-assets:
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            targetOSAndARCH: linux-arm64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            targetOSAndARCH: macos-arm64
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            targetOSAndARCH: linux-amd64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            targetOSAndARCH: macos-amd64
+          # Universal macOS binary is supported as universal-apple-darwin.
+          - target: universal-apple-darwin
+            os: macos-latest
+            targetOSAndARCH: macos
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            targetOSAndARCH: window-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          # (required) Comma-separated list of binary names (non-extension portion of filename) to build and upload.
+          # Note that glob pattern is not supported yet.
+          bin: job-hunting-server
+          archive: $bin-$tag-$target
+          # (optional) Target triple, default is host triple.
+          target: ${{ matrix.target }}
+          # (required) GitHub token for uploading assets to GitHub Releases.
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rename bin file
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        run: |
+          mv target/${{ matrix.target }}/release/job-hunting-server target/${{ matrix.target }}/release/job-hunting-server-${{ matrix.targetOSAndARCH }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        with:
+          name: job-hunting-server-${{ matrix.targetOSAndARCH }}
+          path: target/${{ matrix.target }}/release/job-hunting-server-${{ matrix.targetOSAndARCH }}
+  upload-docker:
+    runs-on: ubuntu-latest
+    needs: upload-assets
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download bin
+        uses: actions/download-artifact@v4
+        with:
+          path: job-hunting-server
+          pattern: job-hunting-server-*
+          merge-multiple: true
+      - name: Move bin file
+        run: |
+          ls -l
+          ls -l job-hunting-server
+          mv job-hunting-server/* ./
+          ls -l
+      - name: Chmod bin file 755
+        run: |
+          chmod 755 job-hunting-server-*
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Log in to Docker Hub
+        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: |
+            lastsunday/job-hunting-server
+            ghcr.io/${{ github.repository }}
+      - name: Build and push Docker images
+        id: push
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: .
+          platforms: |
+            linux/amd64
+            linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
