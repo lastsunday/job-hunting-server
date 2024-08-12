@@ -1,0 +1,219 @@
+name: release
+
+permissions:
+  contents: write
+  packages: write
+  attestations: write
+  id-token: write
+
+on:
+  push:
+    tags:
+      - "*"
+
+env:
+  REGISTRY: ghcr.io
+  SERVICE_JH_DIR: ./service/jh
+  SERVICE_JH_IMAGE_NAME: job-hunting-server-service-jh
+  DATABASE_DIR: ./database
+  DATABASE_JH_DIR: ./database/jh
+  DATABASE_JH_IMAGE_NAME: job-hunting-server-database-jh
+  IMAGE_NAME: ${{ github.repository }}
+  USER_NAME: lastsunday
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Gen latest changelog
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          awk '/^##[^#]/{print NR}' CHANGELOG.md | head -n 2 | xargs | tr ' ' ',' | xargs -I {} sed -n {}p  CHANGELOG.md | sed '$d' > ${{ github.workspace }}-CHANGELOG.txt
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        id: create_release
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          body_path: ${{ github.workspace }}-CHANGELOG.txt
+      - name: Gradle build
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'adopt'
+          java-version: '17'
+          cache: 'gradle'
+      - run: ./gradlew build --no-daemon
+        working-directory: ${{ env.DATABASE_DIR }}
+      - name: Upload artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.DATABASE_JH_DIR }}/build/libs/jh-${{ github.ref_name }}.jar
+          asset_name: job-hunting-server-database-jh-${{ github.ref_name }}-java17.jar
+          asset_content_type: application/zip
+
+  service-jh-upload-assets:
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            targetOSAndARCH: linux-arm64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            targetOSAndARCH: macos-arm64
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            targetOSAndARCH: linux-amd64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            targetOSAndARCH: macos-amd64
+          # Universal macOS binary is supported as universal-apple-darwin.
+          - target: universal-apple-darwin
+            os: macos-latest
+            targetOSAndARCH: macos
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            targetOSAndARCH: window-amd64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: ${{ env.SERVICE_JH_DIR }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          # (required) Comma-separated list of binary names (non-extension portion of filename) to build and upload.
+          # Note that glob pattern is not supported yet.
+          bin: ${{ env.SERVICE_JH_IMAGE_NAME}}
+          archive: $bin-$tag-$target
+          # (optional) Target triple, default is host triple.
+          target: ${{ matrix.target }}
+          # (required) GitHub token for uploading assets to GitHub Releases.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          manifest-path: ${{ env.SERVICE_JH_DIR }}/Cargo.toml
+      - name: Rename bin file
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        run: |
+          mv target/${{ matrix.target }}/release/${{ env.SERVICE_JH_IMAGE_NAME}} target/${{ matrix.target }}/release/${{ env.SERVICE_JH_IMAGE_NAME}}-${{ matrix.targetOSAndARCH }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        with:
+          name: ${{ env.SERVICE_JH_IMAGE_NAME}}-${{ matrix.targetOSAndARCH }}
+          path: ${{ env.SERVICE_JH_DIR }}/target/${{ matrix.target }}/release/${{ env.SERVICE_JH_IMAGE_NAME}}-${{ matrix.targetOSAndARCH }}
+
+  service-jh-upload-docker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.SERVICE_JH_DIR }}
+    needs: service-jh-upload-assets
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Download bin
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ env.SERVICE_JH_DIR }}/${{ env.SERVICE_JH_IMAGE_NAME}}
+          pattern: ${{ env.SERVICE_JH_IMAGE_NAME}}-*
+          merge-multiple: true
+      - name: Move bin file
+        run: |
+          mv ${{ env.SERVICE_JH_IMAGE_NAME}}/* ./
+      - name: Chmod bin file 755
+        run: |
+          chmod 755 ${{ env.SERVICE_JH_IMAGE_NAME}}-*
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Log in to Docker Hub
+        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: |
+            ${{env.USER_NAME}}/${{ env.SERVICE_JH_IMAGE_NAME}}
+            ghcr.io/${{env.USER_NAME}}/${{ env.SERVICE_JH_IMAGE_NAME}}
+      - name: Build and push Docker images
+        id: push
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: ${{ env.SERVICE_JH_DIR }}
+          platforms: |
+            linux/amd64
+            linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{env.USER_NAME}}/${{ env.SERVICE_JH_IMAGE_NAME}}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  database-jh-upload-docker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.DATABASE_JH_DIR }}
+    needs: create-release
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Log in to Docker Hub
+        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: |
+            ${{env.USER_NAME}}/${{ env.DATABASE_JH_IMAGE_NAME}}
+            ghcr.io/${{env.USER_NAME}}/${{ env.DATABASE_JH_IMAGE_NAME}}
+      - name: Build and push Docker images
+        id: push
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: ${{ env.DATABASE_JH_DIR }}
+          platforms: |
+            linux/amd64
+            linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{env.USER_NAME}}/${{ env.DATABASE_JH_IMAGE_NAME}}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

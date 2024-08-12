@@ -1,0 +1,39 @@
+name: build
+
+on:
+  push:
+    branches: [ "main","dev" ]
+  pull_request:
+    branches: [ "main","dev" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  service-jh-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./service/jh
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
+  database-jh-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./database
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+    - name: Gradle build
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'adopt'
+        java-version: '17'
+        cache: 'gradle'
+    - run: ./gradlew build --no-daemon

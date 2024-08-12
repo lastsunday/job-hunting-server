@@ -1,0 +1,41 @@
+<?xml version="1.1" encoding="UTF-8" standalone="no"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+	  http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.8.xsd">
+    <changeSet id="0.0.1-001" author="lastsunday" labels="jh">
+        <comment>Create Table: Job</comment>
+        <createTable remarks="职位" tableName="jh_job">
+            <column name="job_id" remarks="职位编号" type="VARCHAR(255)">
+                <constraints nullable="false" primaryKey="true"/>
+            </column>
+            <column name="job_platform" remarks="发布平台" type="VARCHAR(255)"/>
+            <column name="job_url" remarks="职位地址" type="VARCHAR(255)"/>
+            <column name="job_name" remarks="职位名称" type="VARCHAR(255)"/>
+            <column name="job_company_name" remarks="职位公司名" type="VARCHAR(255)"/>
+            <column name="job_location_name" remarks="职位区域名" type="VARCHAR(255)"/>
+            <column name="job_address" remarks="职位地址" type="VARCHAR(255)"/>
+            <column name="job_longitude" remarks="职位经度" type="DECIMAL(12, 8)"/>
+            <column name="job_latitude" remarks="职位纬度" type="DECIMAL(12, 8)"/>
+            <column name="job_description" remarks="职位描述" type="TEXT"/>
+            <column name="job_degree_name" remarks="职位所需学历" type="VARCHAR(255)"/>
+            <column name="job_year" remarks="职位所需年限" type="INT"/>
+            <column name="job_salary_min" remarks="职位最少薪资" type="DECIMAL(10, 2)"/>
+            <column name="job_salary_max" remarks="职位最大薪资" type="DECIMAL(10, 2)"/>
+            <column name="job_salary_total_month" remarks="几薪" type="INT"/>
+            <column name="job_first_publish_datetime" remarks="职位发布时间" type="DATETIME"/>
+            <column name="boss_name" remarks="招聘者姓名" type="VARCHAR(255)"/>
+            <column name="boss_company_name" remarks="招聘者公司名" type="VARCHAR(255)"/>
+            <column name="boss_position" remarks="招聘者职位" type="VARCHAR(255)"/>
+            <column name="create_by" remarks="创建者" type="BIGINT"/>
+            <column name="update_by" remarks="更新者" type="BIGINT"/>
+            <column name="create_datetime" remarks="创建时间" type="DATETIME"/>
+            <column name="update_datetime" remarks="更新时间" type="DATETIME"/>
+        </createTable>
+        <rollback>
+            <dropTable tableName="jh_job"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
